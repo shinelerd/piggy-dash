@@ -67,12 +67,12 @@ const $=id=>document.getElementById(id);
 const CORE=["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"];
 let D=null, PX={}, pxTime=0;
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-const fmt=(h,t)=>{const d=new Date(h*3600e3),o={month:"short",day:"numeric",timeZone:"UTC"};
+const fmt=(h,t)=>{const d=new Date(h*3600e3),o={month:"short",day:"numeric",timeZone:"Asia/Bangkok"};
   if(t){o.hour="2-digit";o.minute="2-digit";}return d.toLocaleString("en-GB",o);};
 const fp=v=>v>=1000?v.toLocaleString("en-US",{maximumFractionDigits:0}):v>=10?v.toFixed(1):v.toFixed(4);
 async function loadDash(){
   try{ D=await (await fetch("dash.json?_="+Date.now())).json();
-    $("status").textContent=`engine last update ${D.updated_utc.replace("T"," ").slice(0,16)} UTC · source ${D.source} · started ${D.start.slice(0,10)}`;
+    const up=new Date(D.updated_utc); $("status").textContent=`engine last update ${up.toLocaleString("en-GB",{timeZone:"Asia/Bangkok",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})} BKK · source ${D.source} · started ${D.start.slice(0,10)}`;
     render(); }catch(e){ $("status").textContent="cannot load paper/dash.json — serve the repo root (see note below)"; }
 }
 async function loadPx(){
