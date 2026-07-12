@@ -1,0 +1,150 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>piggy_bank — paper dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{ --surface:#fcfcfb; --page:#f9f9f7; --ink:#0b0b0b; --ink2:#52514e;
+  --muted:#898781; --grid:#e1e0d9; --base:#c3c2b7; --long:#2a78d6;
+  --short:#e34948; --win:#0ca30c; --loss:#d03b3b; --chip:#efeeea;
+  --border:rgba(11,11,11,.10);}
+@media (prefers-color-scheme: dark){ :root{ --surface:#1a1a19; --page:#0d0d0d;
+  --ink:#fff; --ink2:#c3c2b7; --grid:#2c2c2a; --base:#383835; --long:#3987e5;
+  --short:#e66767; --chip:#262624; --border:rgba(255,255,255,.10);} }
+*{box-sizing:border-box}
+body{margin:0; padding:16px 20px; background:var(--page); color:var(--ink);
+  font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;}
+h1{font-size:17px; margin:0; font-weight:650;}
+.sub{color:var(--ink2); font-size:12px; margin:2px 0 12px;}
+.sub .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:var(--win); margin-right:4px; animation:blink 2s infinite;}
+@keyframes blink{50%{opacity:.3}}
+.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+  gap:8px; margin-bottom:12px;}
+.tile{background:var(--surface); border:1px solid var(--border);
+  border-radius:8px; padding:8px 10px;}
+.tile .k{font-size:10px; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--muted);}
+.tile .v{font-size:18px; font-weight:650; font-variant-numeric:tabular-nums;}
+.cols{display:grid; grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);
+  gap:10px;} @media(max-width:880px){.cols{grid-template-columns:1fr;}}
+.panel{background:var(--surface); border:1px solid var(--border);
+  border-radius:8px; padding:10px 12px; margin-bottom:10px;}
+.ptitle{font-size:10px; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--muted); margin:0 0 6px;}
+canvas{display:block; width:100%; height:220px;}
+table{width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums;}
+th{font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--muted); text-align:right; padding:3px 6px; font-weight:600;}
+th:first-child,td:first-child{text-align:left;}
+td{padding:5px 6px; border-top:1px solid var(--grid); text-align:right;
+  font-size:13px;}
+.pos{font-weight:650;} .flat{color:var(--muted);}
+.led{font-size:12px; line-height:1.5; max-height:220px; overflow-y:auto;
+  color:var(--ink2); white-space:pre-wrap; word-break:break-all;}
+.note{color:var(--muted); font-size:11px; margin-top:8px;}
+</style></head><body>
+<h1>🐷 piggy_bank — paper trading dashboard</h1>
+<p class="sub"><span class="dot"></span><span id="status">loading…</span></p>
+<div class="tiles">
+  <div class="tile"><div class="k">paper P&L</div><div class="v" id="pnl">—</div></div>
+  <div class="tile"><div class="k">on $1,000</div><div class="v" id="usd">—</div></div>
+  <div class="tile"><div class="k">ann. Sharpe</div><div class="v" id="sh">—</div></div>
+  <div class="tile"><div class="k">max drawdown</div><div class="v" id="dd">—</div></div>
+  <div class="tile"><div class="k">exposure</div><div class="v" id="ex">—</div></div>
+  <div class="tile"><div class="k">halt check</div><div class="v" id="halt" style="font-size:13px">—</div></div>
+</div>
+<div class="cols"><div>
+  <div class="panel"><p class="ptitle">Paper equity since start (CI-computed; last point marked live intra-bar)</p><canvas id="eq"></canvas></div>
+  <div class="panel"><p class="ptitle">Book & live prices <span id="pxage"></span></p>
+    <table id="book"><tr><th>coin</th><th>position</th><th>bar open</th><th>live</th><th>intra-bar move</th><th>position P&L (live)</th></tr></table>
+  </div>
+</div>
+<div class="panel"><p class="ptitle">Ledger — last position changes</p><div class="led" id="led">—</div></div>
+</div>
+<p class="note">Data: refreshed automatically every 4h by the trading engine; live prices poll Binance's public mirror every 30s. The band: Sharpe ~1.0 · CAGR 30–45%/yr · maxDD &gt; −35%.</p>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const CORE=["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"];
+let D=null, PX={}, pxTime=0;
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt=(h,t)=>{const d=new Date(h*3600e3),o={month:"short",day:"numeric",timeZone:"UTC"};
+  if(t){o.hour="2-digit";o.minute="2-digit";}return d.toLocaleString("en-GB",o);};
+const fp=v=>v>=1000?v.toLocaleString("en-US",{maximumFractionDigits:0}):v>=10?v.toFixed(1):v.toFixed(4);
+async function loadDash(){
+  try{ D=await (await fetch("dash.json?_="+Date.now())).json();
+    $("status").textContent=`engine last update ${D.updated_utc.replace("T"," ").slice(0,16)} UTC · source ${D.source} · started ${D.start.slice(0,10)}`;
+    render(); }catch(e){ $("status").textContent="cannot load paper/dash.json — serve the repo root (see note below)"; }
+}
+async function loadPx(){
+  try{ const r=await (await fetch("https://data-api.binance.vision/api/v3/ticker/price?symbols="+encodeURIComponent(JSON.stringify(CORE)))).json();
+    PX=Object.fromEntries(r.map(x=>[x.symbol,+x.price])); pxTime=Date.now(); render(); }catch(e){}
+}
+function livePnlFrac(){
+  if(!D) return 0;
+  let s=0;
+  for(const c of CORE){ const t=D.targets[c]||0;
+    if(t && PX[c] && D.bar_open[c]) s += t*(D.expo||0)*(PX[c]/D.bar_open[c]-1)/CORE.length; }
+  return s;
+}
+function render(){
+  if(!D) return;
+  const m=D.metrics, lp=livePnlFrac();
+  const tot=(1+m.return_pct/100)*(1+lp)-1;
+  $("pnl").textContent=(tot>=0?"+":"")+(tot*100).toFixed(2)+"%";
+  $("pnl").style.color=tot>=0?css("--win"):css("--loss");
+  $("usd").textContent=(tot>=0?"+$":"−$")+Math.abs(tot*1000).toFixed(2);
+  $("usd").style.color=$("pnl").style.color;
+  $("sh").textContent=m.days>7?m.sharpe.toFixed(2):"— (day "+(m.days+1)+")";
+  $("dd").textContent=m.maxdd_pct.toFixed(2)+"%";
+  $("ex").textContent=(D.expo||0).toFixed(2)+"×";
+  $("halt").textContent=D.halt_check;
+  $("halt").style.color=D.halt_check==="OK"?css("--win"):css("--loss");
+  // book table
+  const tb=$("book");
+  while(tb.rows.length>1) tb.deleteRow(1);
+  for(const c of CORE){ const t=D.targets[c]||0, bo=D.bar_open[c], px=PX[c];
+    const r=tb.insertRow();
+    const put=(v,cls)=>{const td=r.insertCell(); td.textContent=v; if(cls)td.className=cls; return td;};
+    put(c.replace("USDT",""));
+    put(t>0?("LONG "+t.toFixed(2)):t<0?("SHORT "+(-t).toFixed(2)):"flat", t?"pos":"flat");
+    put(bo?fp(bo):"—"); put(px?fp(px):"…");
+    const mv=px&&bo?(px/bo-1)*100:null;
+    const tdm=put(mv==null?"—":(mv>=0?"+":"")+mv.toFixed(2)+"%");
+    if(mv!=null) tdm.style.color=mv>=0?css("--win"):css("--loss");
+    const pl=(t&&mv!=null)?t*(D.expo||0)*mv/CORE.length:null;
+    const tdp=put(pl==null?"—":(pl>=0?"+":"")+pl.toFixed(3)+"%");
+    if(pl!=null) tdp.style.color=pl>=0?css("--win"):css("--loss");
+  }
+  $("pxage").textContent=pxTime?("· prices "+Math.round((Date.now()-pxTime)/1000)+"s ago"):"";
+  $("led").textContent=(D.ledger&&D.ledger.length)?D.ledger.slice().reverse().join("\n")
+    :"no position changes yet — the book has been flat since start (correct for current regime)";
+  drawEq(lp);
+}
+function drawEq(lp){
+  const el=$("eq"), dpr=devicePixelRatio||1, r=el.getBoundingClientRect();
+  el.width=r.width*dpr; el.height=r.height*dpr;
+  const g=el.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+  const E=D.equity; if(!E||E.length<1) return;
+  const vals=E.map(x=>x[1]); const liveV=vals[vals.length-1]*(1+lp);
+  const lo=Math.min(...vals,liveV,0.999), hi=Math.max(...vals,liveV,1.001);
+  const W=r.width,H=r.height, X=i=>i/Math.max(1,E.length-0.5)*(W-60)+4,
+    Y=v=>H-16-(v-lo)/(hi-lo)*(H-30);
+  g.strokeStyle=css("--grid"); g.lineWidth=.8; g.fillStyle=css("--muted");
+  g.font="10px system-ui";
+  [lo,1,hi].forEach(v=>{const y=Y(v); g.beginPath(); g.moveTo(4,y);
+    g.lineTo(W-4,y); g.stroke(); g.fillText(((v-1)*100).toFixed(2)+"%",W-54,y-2);});
+  g.strokeStyle=css("--long"); g.lineWidth=2; g.beginPath();
+  E.forEach((p,i)=>{const x=X(i),y=Y(p[1]); i?g.lineTo(x,y):g.moveTo(x,y);});
+  g.stroke();
+  g.setLineDash([3,3]); g.beginPath(); g.lineTo? null:0;
+  g.moveTo(X(E.length-1),Y(vals[vals.length-1])); g.lineTo(X(E.length-0.4),Y(liveV));
+  g.stroke(); g.setLineDash([]);
+  g.fillStyle=css("--long"); g.beginPath();
+  g.arc(X(E.length-0.4),Y(liveV),4,0,7); g.fill();
+  g.fillStyle=css("--ink2");
+  g.fillText("live",X(E.length-0.4)-10,Y(liveV)-8);
+}
+loadDash(); loadPx();
+setInterval(loadPx,30000); setInterval(loadDash,60000);
+addEventListener("resize",()=>render());
+</script></body></html>
